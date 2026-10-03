@@ -1,124 +1,104 @@
-# Модуль 04. Каталог книг — DTO, AutoMapper, Repository и EF Core
+# Домашняя работа — Модуль 04: Book Catalog API
 
-**CSE5032 «Разработка веб-сервисов»**  
-Самостоятельная работа студентов
+**CSE5032 · Разработка веб-сервисов · Модуль 04**
+
+Требовалось сделать каталог книг с постоянным хранением и разделить приложение на слои. EF Core и миграция создают SQLite-базу. Контроллер обращается к Repository, а не напрямую к контексту. AutoMapper преобразует Entity и DTO, а `ReturnResult` задаёт общий формат ответа, не заменяя HTTP-коды. Покажу полный сценарий: создание, чтение, изменение, поиск по автору и удаление.
+
+---
+
+## Цель
+
+Создать каталог книг с хранением через Entity Framework Core и показать разделение API, DTO, бизнес-доступа к данным и базы данных.
 
 ## Краткий отчёт
 
-Разработан ASP.NET Core Web API для каталога книг. API хранит книги в SQLite через Entity Framework Core, использует подход Code First и миграции, отдельные DTO, AutoMapper, Repository и общий формат ответа `ReturnResult<T>`. База при запуске приложения создаётся и обновляется применением миграций; начальные записи добавляются из миграции.
+Проект использует SQLite и Code First миграцию. Контроллер обращается к данным через `IBookRepository`; AutoMapper преобразует сущности в DTO; ответы обёрнуты в `ReturnResult<T>`. Дополнительно реализован поиск по автору.
 
-Для проверки Swagger UI: `http://127.0.0.1:5085/swagger`. Для повторного запуска из каталога проекта:
+## Выполнение по шагам
 
-```powershell
-dotnet run --urls http://127.0.0.1:5085
-```
+| Шаг по заданию | Реализация | Для чего |
+|---|---|---|
+| 1. Модель и БД | Созданы `Book`, `BookCatalogDbContext` и строка `BookCatalog` в `appsettings.json` | Описать сущность и настроить хранилище |
+| 2. Code First | Добавлена миграция `InitialCreate`; при запуске приложение применяет миграции | Создать/обновить SQLite-схему из классов |
+| 3. Repository | `IBookRepository` и `BookRepository` выполняют операции EF Core | Не давать контроллеру обращаться напрямую к `DbContext` |
+| 4. DTO и AutoMapper | Созданы DTO для чтения/создания/обновления и `BookMappingProfile` | Отделить API-контракт от сущности и автоматизировать преобразования |
+| 5. Единый результат | `ReturnResult<T>` формирует `isSuccess`, `result`, `errorMessage` | Сделать тело ответа предсказуемым, сохраняя HTTP status code |
+| 6. CRUD | Реализованы GET списка/по Id, POST, PUT, DELETE | Управлять книгами по HTTP |
+| 7. Поиск | Добавлен `GET /api/books/search?author=...` | Найти книги по автору |
+| 8. Проверка | Через Swagger создана книга, получена, изменена, найдена и удалена | Проверить полный сценарий работы API |
 
-## Модель книги
+## Модель `Book`
 
-| Поле | Тип | Ограничение |
-| --- | --- | --- |
+| Поле | Тип | Ограничение / назначение |
+|---|---|---|
 | `Id` | `int` | Первичный ключ, генерируется базой |
-| `Title` | `string` | Обязательное, до 160 символов |
-| `Author` | `string` | Обязательное, до 120 символов |
-| `Year` | `int` | От 1450 до 2100 |
-| `Price` | `decimal` | От 1 до 100 000 000, точность хранения 10,2 |
-| `Description` | `string` | До 2000 символов |
+| `Title` | `string` | Обязательное название, до 160 символов |
+| `Author` | `string` | Обязательное имя автора, до 120 символов |
+| `Year` | `int` | Год публикации, допустимый диапазон задан моделью |
+| `Price` | `decimal` | Цена; точность задаётся конфигурацией модели |
+| `Description` | `string` | Описание книги |
 
-`Book` — сущность базы данных. `BookDto` задаёт публичный формат чтения; `CreateBookDto` и `UpdateBookDto` валидируют входные данные. Автоматические преобразования между DTO и `Book` описаны в `BookMappingProfile`.
+## Endpoint
 
-## Архитектура и шаги реализации
+| Метод | Endpoint | Назначение | Успех / основные ошибки |
+|---|---|---|---|
+| `GET` | `/api/books` | Получить все книги | `200 OK` |
+| `GET` | `/api/books/{id}` | Получить книгу по Id | `200 OK`, `404 Not Found` |
+| `POST` | `/api/books` | Создать книгу | `201 Created`, `400 Bad Request` |
+| `PUT` | `/api/books/{id}` | Изменить книгу | `200 OK`, `404 Not Found` |
+| `DELETE` | `/api/books/{id}` | Удалить книгу | `200 OK`, `404 Not Found` |
+| `GET` | `/api/books/search?author=Bradbury` | Поиск по автору | `200 OK`; пустой параметр — `400 Bad Request` |
 
-1. Создан проект ASP.NET Core Web API на шаблоне с контроллерами и Swagger.
-2. Добавлены сущность `Book`, DTO для чтения/создания/изменения и правила проверки полей.
-3. Создан `BookCatalogDbContext`; строка подключения SQLite хранится в `appsettings.json`.
-4. Добавлена миграция Code First `InitialCreate` с таблицей и демонстрационными книгами. При запуске вызывается `Database.Migrate()`.
-5. Доступ к данным вынесен в `IBookRepository` и `BookRepository`; контроллер не содержит EF-запросов.
-6. AutoMapper преобразует входные DTO в сущность и сущность в DTO.
-7. Все ответы контроллера имеют общую оболочку `ReturnResult<T>` с полями `success`, `message`, `data`; ошибки валидации, отсутствующей книги и необработанные ошибки возвращаются в таком же формате.
-8. В `BooksController` реализованы CRUD и поиск по автору.
-
-Назначение компонентов: **Entity** описывает сохраняемую запись; **DTO** отделяет контракт API от внутренней модели; **DbContext** связывает сущности с EF Core и базой; **Repository** изолирует операции чтения/записи; **AutoMapper** выполняет преобразование объектов по профилю; **ReturnResult** обеспечивает единый формат ответа.
-
-## Endpoint и проверка в Swagger
-
-| Метод | Endpoint | Назначение | Проверенный результат |
-| --- | --- | --- | --- |
-| `GET` | `/api/books` | Получить список книг | `200 OK` |
-| `GET` | `/api/books/{id}` | Получить книгу по ID | `200 OK`, для отсутствующей — `404 Not Found` |
-| `POST` | `/api/books` | Добавить книгу | `201 Created`; ошибочные данные — `400 Bad Request` |
-| `PUT` | `/api/books/{id}` | Изменить книгу | `200 OK`, для отсутствующей — `404 Not Found` |
-| `DELETE` | `/api/books/{id}` | Удалить книгу | `200 OK`, для отсутствующей — `404 Not Found` |
-| `GET` | `/api/books/search?author=Bradbury` | Найти книги по автору (без учёта регистра) | `200 OK`; без автора — `400 Bad Request` |
-
-Пример тела создания/изменения:
+## Пример JSON
 
 ```json
 {
-  "title": "The Martian Chronicles",
+  "title": "Fahrenheit 451",
   "author": "Ray Bradbury",
-  "year": 1950,
-  "price": 5200,
-  "description": "A collection of stories about the colonization of Mars."
+  "year": 1953,
+  "price": 4500,
+  "description": "Роман-антиутопия"
 }
 ```
 
-Пример успешного ответа (`ReturnResult<BookDto>`):
+## Проверка и скриншоты
 
-```json
-{
-  "success": true,
-  "message": "Книга получена.",
-  "data": {
-    "id": 1,
-    "title": "The Martian Chronicles",
-    "author": "Ray Bradbury",
-    "year": 1950,
-    "price": 5200,
-    "description": "A collection of stories about the colonization of Mars."
-  }
-}
-```
-
-## Скриншоты выполнения
-
-Ниже размещены отдельные снимки реального Swagger UI после нажатия **Try it out** и **Execute**. В демонстрации выполнена последовательность: создание → получение → изменение → поиск по автору → удаление; затем проверен `404` для удалённой книги.
-
-### Swagger и доступные операции
+### Шаг 1. Список endpoint
 
 ![Swagger UI со списком endpoint](docs/swagger-endpoints.png)
 
-### GET — список книг
+### Шаг 2. Список книг — `GET /api/books`
 
-![GET списка книг: ответ 200](docs/get-all.png)
+![GET списка книг — 200 OK](docs/get-all.png)
 
-### POST — создание книги
+### Шаг 3. Создание книги — `POST /api/books`
 
-![POST: книга создана, ответ 201](docs/post-create.png)
+![POST: книга создана — 201 Created](docs/post-create.png)
 
-### GET — книга по ID
+### Шаг 4. Чтение созданной книги — `GET /api/books/{id}`
 
-![GET по ID: ответ 200](docs/get-by-id.png)
+![GET по ID — 200 OK](docs/get-by-id.png)
 
-### PUT — изменение книги
+### Шаг 5. Изменение — `PUT /api/books/{id}`
 
-![PUT: данные книги изменены, ответ 200](docs/put-update.png)
+![PUT: данные книги изменены — 200 OK](docs/put-update.png)
 
-### Поиск книги по автору
+### Шаг 6. Поиск — `GET /api/books/search?author=Bradbury`
 
-![Поиск по автору Bradbury: найденная книга в ответе](docs/search-author.png)
+![Результат поиска по автору Bradbury](docs/search-author.png)
 
-### DELETE — удаление книги
+### Шаг 7. Удаление — `DELETE /api/books/{id}`
 
 ![DELETE: книга удалена](docs/delete-book.png)
 
-### Проверка после удаления
+### Шаг 8. Проверка отсутствующей книги
 
-![GET удалённой книги: ответ 404 Not Found](docs/get-after-delete-404.png)
+![Повторный GET удалённой книги — 404 Not Found](docs/get-after-delete-404.png)
 
-### Вывод EF Core в PowerShell
+### Журнал EF Core
 
-![Окно PowerShell с логами выполнения запросов к базе](docs/powershell-logs.png)
+![PowerShell с журналом выполнения запросов к базе](docs/powershell-logs.png)
 
 ## Вывод
 
-В работе реализован API каталога книг с Code First на EF Core, SQLite, миграцией, Repository, DTO, AutoMapper, единым форматом ответа и полным CRUD. В Swagger проверены основные операции, поиск по автору и ответ `404` для отсутствующей книги.
+Реализована цепочка `Controller → Repository → EF Core → SQLite` и преобразование `Entity ↔ AutoMapper ↔ DTO`. Через Swagger проверены CRUD и дополнительный поиск по автору.
